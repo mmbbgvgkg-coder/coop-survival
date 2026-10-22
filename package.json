@@ -1,0 +1,12 @@
+{
+  "name": "coop-survival",
+  "version": "1.0.0",
+  "description": "Co-op survival game with rooms and LAN/online multiplayer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

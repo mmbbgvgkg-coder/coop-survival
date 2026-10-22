@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Co-op Survival</title>
+<style>
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: #07090d;
+    font-family: Tahoma, sans-serif; color: #eee;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  canvas { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+  #menu {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 50% 30%, #14202e, #05070a); z-index: 5;
+  }
+  .card {
+    width: min(92vw, 380px); padding: 24px; box-sizing: border-box; border-radius: 18px;
+    background: rgba(15, 22, 32, .85); border: 1px solid #1f3347;
+    box-shadow: 0 0 40px rgba(76, 201, 240, .15); text-align: center;
+  }
+  h1 { margin: 0 0 18px; font-size: 26px; color: #4cc9f0; text-shadow: 0 0 12px #4cc9f0; }
+  input {
+    width: 100%; box-sizing: border-box; padding: 12px; margin: 6px 0; border-radius: 10px;
+    border: 1px solid #2a4158; background: #0a1018; color: #fff; font-size: 16px; text-align: center;
+  }
+  button {
+    width: 100%; padding: 13px; margin: 8px 0; border: 0; border-radius: 10px; font-size: 16px;
+    font-weight: bold; color: #06121a; cursor: pointer;
+    background: linear-gradient(90deg, #4cc9f0, #7b61ff);
+  }
+  button:active { transform: scale(.98); }
+  .or { opacity: .5; margin: 6px 0; font-size: 13px; }
+  #lobby { display: none; }
+  #roomcode { font-size: 34px; letter-spacing: 6px; color: #ffd166; margin: 10px 0; text-shadow: 0 0 10px #ffd166; }
+  #plist { font-size: 14px; opacity: .85; margin: 8px 0; line-height: 1.8; }
+  #start { display: none; }
+  #waitmsg { font-size: 14px; opacity: .6; margin-top: 8px; }
+  #msg { color: #ff6b6b; min-height: 20px; font-size: 14px; margin-top: 8px; }
+  .hint { font-size: 12px; opacity: .5; margin-top: 10px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu">
+  <div class="card">
+    <h1>Co-op Survival</h1>
+    <div id="form">
+      <input id="name" placeholder="اسمت" maxlength="12">
+      <button id="create">ساخت اتاق جدید</button>
+      <div class="or">— یا —</div>
+      <input id="code" placeholder="کد اتاق" maxlength="4">
+      <button id="join">ورود به اتاق</button>
+    </div>
+    <div id="lobby">
+      <div>کد اتاق</div>
+      <div id="roomcode"></div>
+      <div id="plist"></div>
+      <button id="start">شروع بازی</button>
+      <div id="waitmsg">منتظر شروع بازی توسط میزبان...</div>
+    </div>
+    <div id="msg"></div>
+    <div class="hint">حرکت: جوی‌استیک (هر جای صفحه انگشت بذار و بکش) · شلیک خودکار · کیبورد: WASD</div>
+  </div>
+</div>
+
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+
+let ws = null, joined = false, myId = null, code = '', state = null;
+
+function resize() {
+  const d = window.devicePixelRatio || 1;
+  cv.width = innerWidth * d;
+  cv.height = innerHeight * d;
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+}
+addEventListener('resize', resize);
+resize();
+
+function send(o) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(o));
+}
+
+function connect(onOpen) {
+  if (ws) ws.close();
+  const host = location.host || 'localhost:3000';
+  const s = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + host);
+  ws = s;
+  s.onopen = onOpen;
+  s.onmessage = e => {
+    if (ws !== s) return;
+    const m = JSON.parse(e.data);
+    if (m.t === 'joined') { joined = true; myId = m.id; code = m.code; }
+    else if (m.t === 'state') { state = m.s; }
+    else if (m.t === 'error') { $('msg').textContent = m.msg; }
+    refreshMenu();
+  };
+  s.onclose = () => {
+    if (ws !== s) return;
+    joined = false; state = null;
+    $('msg').textContent = 'اتصال قطع شد';
+    refreshMenu();
+  };
+}
+
+function refreshMenu() {
+  const lobby = joined && (!state || state.state === 'lobby');
+  $('form').style.display = joined ? 'none' : 'block';
+  $('lobby').style.display = lobby ? 'block' : 'none';
+  $('menu').style.display = (!joined || lobby) ? 'flex' : 'none';
+  if (lobby) {
+    $('roomcode').textContent = code;
+    const names = state ? state.players.map(p => p.name) : [];
+    $('plist').textContent = 'بازیکن‌ها (' + names.length + '/4): ' + names.join('، ');
+    const host = state && state.host === myId;
+    $('start').style.display = host ? 'block' : 'none';
+    $('waitmsg').style.display = host ? 'none' : 'block';
+  }
+}
+
+$('create').onclick = () => {
+  $('msg').textContent = '';
+  const name = $('name').value.trim() || 'بازیکن';
+  connect(() => send({ t: 'create', name }));
+};
+$('join').onclick = () => {
+  $('msg').textContent = '';
+  const name = $('name').value.trim() || 'بازیکن';
+  const c = $('code').value.trim().toUpperCase();
+  if (c.length !== 4) { $('msg').textContent = 'کد اتاق باید ۴ کاراکتر باشه'; return; }
+  connect(() => send({ t: 'join', name, code: c }));
+};
+$('start').onclick = () => send({ t: 'start' });
+
+// ---------- Input ----------
+const keys = {};
+addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+let joy = null; // floating joystick anchored where the finger first touches
+cv.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (!joy) joy = { id: t.identifier, ox: t.clientX, oy: t.clientY, x: t.clientX, y: t.clientY };
+  }
+}, { passive: false });
+cv.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (joy && t.identifier === joy.id) { joy.x = t.clientX; joy.y = t.clientY; }
+  }
+}, { passive: false });
+const endTouch = e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (joy && t.identifier === joy.id) joy = null;
+  }
+};
+cv.addEventListener('touchend', endTouch, { passive: false });
+cv.addEventListener('touchcancel', endTouch, { passive: false });
+
+function getInput() {
+  let x = 0, y = 0;
+  if (joy) {
+    const dx = joy.x - joy.ox, dy = joy.y - joy.oy;
+    const L = Math.hypot(dx, dy);
+    if (L > 6) {
+      const m = Math.min(L / 60, 1);
+      x = dx / L * m;
+      y = dy / L * m;
+    }
+  }
+  x += (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+  y += (keys['s'] ? 1 : 0) - (keys['w'] ? 1 : 0);
+  const L = Math.hypot(x, y);
+  if (L > 1) { x /= L; y /= L; }
+  return { x, y };
+}
+
+setInterval(() => {
+  if (!joined) return;
+  const i = getInput();
+  send({ t: 'input', x: i.x, y: i.y });
+}, 50);
+
+// ---------- Rendering ----------
+const COL = { z: '#7bd389', r: '#ffb703', b: '#e63946' };
+const RAD = { z: 13, r: 9, b: 22 };
+const PCOL = ['#4cc9f0', '#f72585', '#b5e48c', '#ffd166'];
+
+function bar(x, y, w, f, k, col) {
+  ctx.fillStyle = 'rgba(0,0,0,.6)';
+  ctx.fillRect(x - w / 2, y, w, 4 / k);
+  ctx.fillStyle = col;
+  ctx.fillRect(x - w / 2, y, w * Math.max(0, Math.min(1, f)), 4 / k);
+}
+
+function draw() {
+  requestAnimationFrame(draw);
+  const W = innerWidth, H = innerHeight;
+  ctx.fillStyle = '#07090d';
+  ctx.fillRect(0, 0, W, H);
+  if (!state) return;
+
+  const me = state.players.find(p => p.id === myId);
+  const k = Math.min(W, H) / 520;
+  const cx = me ? me.x : 500, cy = me ? me.y : 500;
+
+  // World (camera follows me)
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(k, k);
+  ctx.translate(-cx, -cy);
+
+  ctx.strokeStyle = '#131c27';
+  ctx.lineWidth = 1 / k;
+  ctx.beginPath();
+  for (let g = 0; g <= 1000; g += 80) {
+    ctx.moveTo(g, 0); ctx.lineTo(g, 1000);
+    ctx.moveTo(0, g); ctx.lineTo(1000, g);
+  }
+  ctx.stroke();
+  ctx.strokeStyle = '#3a1f2b';
+  ctx.lineWidth = 4 / k;
+  ctx.strokeRect(0, 0, 1000, 1000);
+
+  // Core
+  const hpFrac = state.core / 100;
+  ctx.shadowColor = '#4cc9f0';
+  ctx.shadowBlur = 25;
+  ctx.beginPath();
+  ctx.arc(500, 500, 34, 0, Math.PI * 2);
+  ctx.fillStyle = `hsl(${190 * hpFrac}, 70%, ${20 + 25 * hpFrac}%)`;
+  ctx.fill();
+  ctx.strokeStyle = '#4cc9f0';
+  ctx.lineWidth = 3 / k;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Enemies
+  for (const e of state.enemies) {
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, RAD[e.t], 0, Math.PI * 2);
+    ctx.fillStyle = COL[e.t];
+    ctx.fill();
+    if (e.hp < e.mhp) bar(e.x, e.y - RAD[e.t] - 8, 26, e.hp / e.mhp, k, '#7bd389');
+  }
+
+  // Bullets
+  ctx.fillStyle = '#ffe066';
+  for (const b of state.bullets) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Players
+  ctx.textAlign = 'center';
+  state.players.forEach((p, i) => {
+    const c = PCOL[i % PCOL.length];
+    ctx.globalAlpha = p.alive ? 1 : 0.3;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 12, 0, Math.PI * 2);
+    ctx.fillStyle = c;
+    ctx.fill();
+    ctx.lineWidth = 2 / k;
+    ctx.strokeStyle = p.id === myId ? '#ffffff' : '#000000';
+    ctx.stroke();
+    ctx.font = (13 / k) + 'px Tahoma';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(p.name, p.x, p.y - 22);
+    bar(p.x, p.y - 17, 26, p.hp / p.maxHp, k, c);
+  });
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // Joystick (screen space)
+  if (joy) {
+    ctx.beginPath();
+    ctx.arc(joy.ox, joy.oy, 50, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,.3)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    const dx = joy.x - joy.ox, dy = joy.y - joy.oy;
+    const L = Math.hypot(dx, dy);
+    const m = Math.min(L, 50);
+    const kx = joy.ox + (L ? dx / L * m : 0);
+    const ky = joy.oy + (L ? dy / L * m : 0);
+    ctx.beginPath();
+    ctx.arc(kx, ky, 20, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(76,201,240,.5)';
+    ctx.fill();
+  }
+
+  // HUD
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 18px Tahoma';
+  ctx.fillText('موج ' + state.wave, 16, 30);
+
+  const bw = Math.min(260, W * 0.6), bx = W / 2 - bw / 2;
+  ctx.fillStyle = 'rgba(255,255,255,.1)';
+  ctx.fillRect(bx, 18, bw, 12);
+  ctx.fillStyle = hpFrac > 0.4 ? '#4cc9f0' : '#e63946';
+  ctx.fillRect(bx, 18, bw * hpFrac, 12);
+  ctx.fillStyle = '#ccc';
+  ctx.textAlign = 'center';
+  ctx.font = '12px Tahoma';
+  ctx.fillText('هسته', W / 2, 46);
+
+  ctx.textAlign = 'right';
+  ctx.font = '13px Tahoma';
+  state.players.forEach((p, i) => {
+    ctx.fillStyle = p.alive ? PCOL[i % PCOL.length] : '#666';
+    ctx.fillText(p.name + ' · ' + p.kills + ' کشته', W - 16, 30 + i * 20);
+  });
+
+  if (me) {
+    const mw = Math.min(220, W * 0.5);
+    ctx.fillStyle = 'rgba(255,255,255,.1)';
+    ctx.fillRect(W / 2 - mw / 2, H - 28, mw, 10);
+    ctx.fillStyle = me.alive ? '#7bd389' : '#666';
+    ctx.fillRect(W / 2 - mw / 2, H - 28, mw * (me.hp / me.maxHp), 10);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ccc';
+    ctx.font = '12px Tahoma';
+    ctx.fillText(me.alive ? 'جان' : 'منتظر موج بعدی برای زنده شدن', W / 2, H - 36);
+  }
+
+  if (state.over) {
+    ctx.fillStyle = 'rgba(0,0,0,.6)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#e63946';
+    ctx.font = 'bold 40px Tahoma';
+    ctx.fillText('هسته سقوط کرد', W / 2, H / 2 - 10);
+    ctx.fillStyle = '#fff';
+    ctx.font = '18px Tahoma';
+    ctx.fillText('به موج ' + state.wave + ' رسیدید — دور بعد شروع می‌شه', W / 2, H / 2 + 30);
+  }
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
